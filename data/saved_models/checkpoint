@@ -1,0 +1,2 @@
+model_checkpoint_path: "trial_discriminator"
+all_model_checkpoint_paths: "trial_discriminator"

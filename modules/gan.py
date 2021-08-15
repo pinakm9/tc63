@@ -1,7 +1,17 @@
+# add modules folder to Python's search path
+import sys
+from pathlib import Path
+from os.path import dirname, realpath, abspath
+script_dir = Path(abspath(''))#Path(dirname(realpath(__file__)))
+module_dir = str(script_dir.parent)
+sys.path.insert(0, module_dir + '/modules')
+
+# import the rest of the libraries
 import tensorflow as tf 
 import os, datetime, time
 from sklearn.model_selection import train_test_split
 import numpy as np
+import plot
 
 LAMBDA = 100.0
 loss_object = tf.keras.losses.BinaryCrossentropy(from_logits=True)
@@ -128,14 +138,19 @@ def get_data_pipeline(path_to_trajectories, path_to_observations, test_size=0.2)
 class GAN:
     
     def __init__(self, folder, name='trial'):
+        self.name = name
+        self.folder = folder + '/{}'.format(self.name)
         self.generator = get_generator()
         self.discriminator = get_discriminator()
         self.generator_optimizer = tf.keras.optimizers.Adam(2e-4, beta_1=0.5)
         self.discriminator_optimizer = tf.keras.optimizers.Adam(2e-4, beta_1=0.5)
-        self.checkpoint_dir = '{}/saved_models'.format(folder)
-        log_dir="{}/logs".format(folder)
+ 
+        log_dir="{}/logs".format(self.folder)
         self.summary_writer = tf.summary.create_file_writer(log_dir + "/fit/" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
-        self.name = name
+        
+        if not os.path.isdir(self.folder):
+            os.mkdir(self.folder)
+
     
     def train_step(self, input_signal, target, step):
         with tf.GradientTape() as gen_tape, tf.GradientTape() as disc_tape:
@@ -154,12 +169,13 @@ class GAN:
 
         self.generator_optimizer.apply_gradients(zip(generator_gradients, self.generator.trainable_variables))
         self.discriminator_optimizer.apply_gradients(zip(discriminator_gradients, self.discriminator.trainable_variables))
-
+        """
         with self.summary_writer.as_default():
             tf.summary.scalar('gen_total_loss', gen_total_loss, step=step//100)
             tf.summary.scalar('gen_gan_loss', gen_gan_loss, step=step//100)
             tf.summary.scalar('gen_l1_loss', gen_l1_loss, step=step//100)
             tf.summary.scalar('disc_loss', disc_loss, step=step//100)
+        """
         return gen_total_loss, disc_loss
         
 
@@ -176,17 +192,26 @@ class GAN:
             
             gen_total_loss, disc_loss = self.train_step(input_signal, target, step)
             print('step #{}:'.format(step), end='\r')
-            # Save (checkpoint) the model every 5k steps
-            if (step + 1) % 100 == 0:
-                self.generator.save_weights(self.checkpoint_dir + '/{}_generator'.format(self.name))
-                self.discriminator.save_weights(self.checkpoint_dir + '/{}_discriminator'.format(self.name))
+    
 
-    def load(self, name):
-        if os.path.isfile(self.checkpoint_dir + '/{}_generator'.format(name) + '.index'):
-            self.generator.load_weights(self.checkpoint_dir + '/{}_generator'.format(name)).expect_partial()
-        if os.path.isfile(self.checkpoint_dir + '/{}_discriminator'.format(name) + '.index'):
-            self.discriminator.load_weights(self.checkpoint_dir + '/{}_discriminator'.format(name)).expect_partial()
+    def save(self):
+        self.generator.save_weights(self.folder + '/{}_generator'.format(self.name))
+        self.discriminator.save_weights(self.folder + '/{}_discriminator'.format(self.name))
+
+    def load(self):
+        if os.path.isfile(self.folder + '/{}_generator'.format(self.name) + '.index'):
+            self.generator.load_weights(self.folder + '/{}_generator'.format(self.name)).expect_partial()
+        if os.path.isfile(self.folder + '/{}_discriminator'.format(self.name) + '.index'):
+            self.discriminator.load_weights(self.folder + '/{}_discriminator'.format(self.name)).expect_partial()
 
     
-    def evaluate(self, test_obs, test_true):
-        pass
+    def evaluate_once(self, test_obs, test_true, dims, suffix='sample'):
+        predicted = np.squeeze(self.generator(test_obs[np.newaxis, :, :]))
+        padded_obs = np.full_like(test_true, np.nan)
+        padded_obs[:, dims] = test_obs
+        sp = plot.SignalPlotter([predicted, test_true, padded_obs])
+        sp.plot_signals(labels=['predicted', 'true', 'observed'], coords_to_plot=[0, 1, 2], file_path='{}/generated_{}.png'.format(self.folder, suffix))
+
+    def evaluate(self, test_obs, test_true, dims, suffix=''):
+        for i, obs in enumerate(test_obs):
+            self.evaluate_once(obs, test_true[i], dims, suffix=suffix + '_' + str(i))
